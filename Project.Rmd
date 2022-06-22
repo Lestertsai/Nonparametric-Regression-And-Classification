@@ -1,0 +1,515 @@
+---
+title: "Project"
+author: "Chaoyi Tsai"
+date: "5/18/2022"
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(fig.pos = '!h')
+```
+
+# Introduction
+
+The data set contains information on clickstream from an online store offering clothing for pregnant women. Data are from five months of 2008 and include, among others, product category, location of the photo on the page, country of origin of the IP address, and product price in US dollars. There are 132380 observations and 14 variables with no missing values in the original data set.
+
+My goal is to compare the prediction performances between the Negative Binomial GLM model and common machine learning techniques, including lasso regression, ridge regression, general additive model, partial least square regression, XGBoost, KNN for Regression, stochastic gradient boosting, bagging, elasticnet, ensemble, boosting, and neural network. All codes are written in R using the packages `lme4` and `Caret`. The evaluation criterion for choosing the best machine learning model is RMSE (root‐mean‐square error).
+
+```{r echo=FALSE, message=FALSE}
+packages = c('lme4', 'fitdistrplus', 'ggplot2','knitr','caretEnsemble','rpart',
+             'superml','caret','scales', 'ggpubr', 'parallel', 'doParallel', 'Metrics')
+invisible(lapply(packages, library, character.only = TRUE))
+cluster <- makeCluster(detectCores() - 2) 
+registerDoParallel(cluster)
+set.seed(1234)
+data <- read.table("/Users/tsaichao-yi/Downloads/e-shop data and description/e-shop clothing 2008.csv", header = T, sep = ';')
+name = c('Year', 'From April (4) to August (8)', 'Day number of the month', 
+         'Sequence of clicks during one session', 'Variable indicating the country of origin of the IP address','Variable indicating session id (short record)',
+         'Concerns the main product category (1=trousers, 2=skirts, 3=blouses, 4=sale)',
+         'Information about the code for each product', 'Colour of product',
+         'Photo location on the page, the screen has been divided into six parts (1=top left, 2=top in the middle, 3=top right, 4=bottom left, 5=bottom in the      middle,6=bottom right)', 'Variable with two categories (en face, profile)', 
+         'Price in US dollars', 'Variable informing whether the price of a particular             product is higher than the average price for the entire product category',
+         'Page number within the e-store website (from 1 to 5)')
+Column = c("year", "month", "day", "order", "country", "session.ID", "page.1..main.category.", "page.2..clothing.model.", "colour", "location", 
+           "model.photography", "price", "price.2", "page")
+info = data.frame(Column = Column, Description = name)
+kable(info, caption = 'Data Information')
+```
+
+```{r echo=FALSE, message=FALSE}
+data$timestamp = as.Date(strptime(paste(data$year, "-", data$month, "-", data$day, sep=""), "%Y-%m-%d"))
+data = data[,-c(1,6)]
+data$price.2 = ifelse(data$price.2==2, 0, 1)
+```
+
+# Exploratory Data Analysis
+
+From figure1, we can see that, though most of the categories in each feature have primarily even percentages, most orders came from a single country (Poland). Interestingly, most items that were ordered were placed on the first page, perhaps because customers are reluctant to browse the following pages. Figure2 shows that while some countries have more continuous orders over these months, such as Poland, Lithuania, and the Czech Republic, others only make orders in a relatively short period.
+
+```{r echo=FALSE, fig.cap='Barplots', fig.width = 6, fig.height = 4}
+day = ggplot(data, aes(x=day)) +
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+    scale_y_continuous(labels = percent_format())+ ylab('Day')+xlab('')
+month = ggplot(data, aes(x=month)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Month')+xlab('')
+nation = ggplot(data, aes(x=country)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Country')+xlab('')
+main = ggplot(data, aes(x=page.1..main.category.)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Main Category')+xlab('')
+photo = ggplot(data, aes(x=model.photography)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Photography')+xlab('')
+page = ggplot(data, aes(x=page)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Page')+xlab('')
+price = ggplot(data, aes(x=price.2)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('price.2')+xlab('')
+color = ggplot(data, aes(x=colour)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Color')+xlab('')
+location = ggplot(data, aes(x=location)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  + 
+    scale_y_continuous(labels = percent_format())+ ylab('Location')+xlab('')
+ggarrange(month, day, nation, main, color, location, photo, price, page, 
+          nrow = 3, ncol = 3)
+``` 
+
+```{r echo=FALSE, fig.cap='Response Variable across Countries'}
+cate_data = data
+cate_data$country = factor(cate_data$country, labels = c("Australia","Austria","Belgium","British Virgin Islands","Cayman Islands","Christmas Island","Croatia","Cyprus","Czech Republic","Denmark","Estonia",
+"unidentified","Faroe Islands","Finland","France","Germany","Greece","Hungary",
+"Iceland","India","Ireland","Italy","Latvia","Lithuania","Luxembourg",
+"Mexico","Netherlands","Norway","Poland","Portugal","Romania","Russia","San Marino", "Slovakia","Slovenia","Spain","Sweden","Switzerland","Ukraine","United Arab Emirates",
+"United Kingdom","USA","biz (*.biz)","com (*.com)","int (*.int)","net (*.net)", "org (*.org)"))
+ggplot(cate_data, aes(timestamp, country, fill = order))+geom_tile()+
+  scale_fill_gradient(low="blue", high="red")
+```
+
+Since my goal is to compare the prediction performance between the parametric and nonparametric models, I would utilize the function `createDataPartition` to create a stratified random sample of the data into training and test sets. Here, 80% of the samples are used for training, and the rest are used for testing.
+
+# Generalized Linear Mixed-Effects Model
+
+While the outcome variable order is count data, meaning that it should be Poisson distribution, due to the existence of a thick right tail, I use the function `fitdist` to confirm that the outcome variable is most similar to the negative binomial distribution.
+
+```{r echo=FALSE, fig.cap='Distribution of the Response Variable', fig.width = 6, fig.height = 4}
+data = data[,-13]
+data[,c(4,5,7:9,11)] = sapply(data[,c(4,5,7:9,11)],as.factor)
+label = LabelEncoder$new()
+data$page.2..clothing.model. = label$fit_transform(data$page.2..clothing.model.)
+draw <- createDataPartition(data$order, p = 0.8, list = FALSE)
+train_glm <- data[draw,]
+test_glm <- data[-draw,]
+plot(fitdist(train_glm$order,"nbinom"))
+```
+
+To fit a generalized linear mixed-effects model (GLMM) for the negative binomial family, I use the function `glmer.nb` in the package `lme4`. The covariates include all the variables listed in the table1 except the variable year and the session ID because the former variable is constant, and the latter is not informative. The only random effect is country, and the rest are fixed effects as I expect there to be inter-nation differences I'm not interested in but want to account for. Below is the model I fit:
+$$
+g(\mu_i)=\beta_0+\sum_{j=1}^{11}\beta_jX_{ij}\;where\;g(\mu_i)=log(\frac{\mu_i}{k(1+\frac{\mu_i}{k})})
+$$
+$$
+\mu_i=E(Y_i|X_{1i},...,X_{11i})\;and\;Y_{ij}|\mu_{ij}\sim NB(k,p_i) 
+$$
+The default optimization method (corresponding to nAGQ=1L) puts all of the coefficients into the general nonlinear optimization call. But owing to the large number of fixed-effects, with nAGQ=0L, these coefficients are optimized within the much faster penalized iteratively reweighted least squares (PIRLS) algorithm. The default will generally provide a better estimate because the deviance at the estimate is lower, but the difference is usually tiny, and the time difference is enormous. The second option tells the function to fit using the [`nloptwrap`](https://search.r-project.org/CRAN/refmans/lme4/html/nloptwrap.html) optimizer to speed up the running time. Since the objective is to compare the forecast performance between each model, I would not make inference or check if the model assumptions are valid, such as whether the residuals are i.i.d. and there is systematic variation in them.
+
+```{r echo=FALSE}
+start.time <- Sys.time()
+model1<- glmer.nb(order ~ page.1..main.category.+model.photography+price.2+
+                    month+day+price+page.2..clothing.model.+colour+
+                     location+page+(1|country),nAGQ=0, 
+                   control=glmerControl(optimizer = "nloptwrap"),data = train_glm)
+end.time <- Sys.time()
+t1 <- as.numeric(difftime(end.time, start.time), units="mins")
+```
+
+# Data Preprocessing
+
+## Categorical Encoding
+
+Label Encoding and One-Hot Encoding are two standard techniques for handling categorical variables. I only transformed the variable `page.2..clothing.model.` into a dummy variable as this feature is not ordinal and there are too many categorical classes. Using the label encoding instead would be computationally laboring due to the high dimensions. On the other hand, I use the label encoding for the rest of the categorical attributes owing to their ordinal characteristic.
+
+```{r echo=FALSE}
+dummy <- dummyVars(" ~ .", data=data[,c(4,5,7:9,11)])
+newdata <- data.frame(predict(dummy, newdata = data))
+newdata = cbind(newdata, data[,c(1:3, 6,10,12)])
+training = newdata[draw,]
+testing = newdata[-draw,]
+```
+
+## Zero- and Near Zero-Variance Predictors
+
+In some situations, the data generating mechanism can create predictors that only have a single unique value (i.e., a “zero-variance predictor”). Many models (excluding tree-based models) may cause the model to crash or the fit to be unstable. Similarly, predictors might have only a handful of unique values with very low frequencies. The concern here is that these predictors may become zero-variance predictors when the data are split into cross-validation/bootstrap sub-samples or that a few samples may have an undue influence on the model. These “near-zero-variance” predictors may need to be identified and eliminated before modeling.
+
+```{r echo=FALSE}
+nzv <- nearZeroVar(training)
+train_filter<- training[, -nzv]
+```
+
+##  Identifying Correlated Predictors
+
+While some models thrive on correlated predictors (such as PLS), other models may benefit from reducing the level of correlation between the predictors. By discarding highly-correlated attributes, the range of the correlation between each variable is between -0.75 and 0.5. 
+
+```{r echo=FALSE}
+highlyCor <- findCorrelation(cor(train_filter), cutoff = .75)
+filtered <- train_filter[,-highlyCor]
+Cor2 <- cor(filtered)
+summary(Cor2[upper.tri(Cor2)])
+```
+
+##  Linear Dependencies
+
+The function `LinearCombos` utilizes the QR decomposition of a matrix to enumerate sets of linear combinations. Each linear combination will incrementally remove columns from the matrix and test to see if the dependencies have been resolved. These dependencies can arise when large numbers of binary chemical fingerprints are used to describe the structure of a molecule. 
+
+```{r echo=FALSE}
+Design = as.matrix(filtered[,-c(22:27)])
+comboInfo <- findLinearCombos(Design)
+filtered = filtered[,-comboInfo$remove]
+```
+
+## Cross-Validation
+
+To do 10 folds cross-validation, we specify `method="cv"` and `number = 10` in the function `trainControl`. Moreover, by specifying `allowParallel = TRUE`, we can speed up the running time using the technique of parallel processing. 
+
+```{r echo=FALSE}
+fitControl <- trainControl(method = "cv",number = 10, allowParallel = TRUE)
+```
+
+# Nonparametric Models
+
+## Ridge regression
+
+This method is in the package `elasticnet`. The only tuning hyperparameter is the weight decay, which is controlled by `lambda` in the function. We can see from figure4 that when $\lambda$ equals 0.005, the RMSE can reach its minimum.
+
+## Lasso regression
+
+This method is in the package `fraction`. The only tuning hyperparameter is the fraction of the full solution, which is controlled by `fraction` in the function. Figure5 below suggests that when the fraction equals 0.996, the RMSE is the smallest, though the difference in RMSE between each tuning hyperparameter specified is minimal.
+
+## Generalized Additive Model using Splines
+
+This method is in the package `mgcv`. The tuning hyperparameters include whether to make feature selection and the smoothing parameter estimation method, which is controlled by  `select` and `method`, respectively. Specifically, "GCV.Cp" uses GCV for unknown scale parameters and Mallows' Cp for known scale. "GACV.Cp" is equivalent, but using GACV in place of GCV. "REML" for REML estimation, including unknown scale, "P-REML" for REML estimation, but using a Pearson estimate of the scale. "ML" and "P-ML" are similar but use maximum likelihood in place of REML. The best combination of tuning hyperparameters would be the "GACV.Cp" estimation and feature selection judging from figure6. Moreover, whether using the "GACV.Cp" estimation or not, choosing the feature selection method generates the best result. 
+
+## eXtreme Gradient Boosting
+
+This method is in the package `xgboost`. The tuning hyperparameters include:
+
+* `nrounds` (Number of Boosting Iterations)
+
+* `max_depth` (Maximum Tree Depth)
+
+* `eta` (Shrinkage)
+
+* `colsample_bytree` (Subsample Ratio of Columns)
+
+* `gamma` (Minimum Loss Reduction)
+
+* `min_child_weight` (Minimum Sum of Instance Weight)
+
+* `subsample` (Subsample Percentage)
+
+Considering the time cost of picking the best candidates, I did not tune the last three hyperparameters. My finding indicates that when having 151 boosting iterations, 8 layers of trees, $\eta$=0.072 and subsample ratio of columns being 0.999 can generate the most promising outcome.
+
+## Partial Least Squares Regression
+
+This method is in the package `pls`. The only tuning hyperparameter is the number of components, which is controlled by `ncomp`. The optimal number of principal components included in the PLS model is 13. This captures 99% of the variation in the predictors and 6% of the variation in the outcome variable.  
+
+## Stochastic Gradient Boosting
+
+This method is in the package `gbm`.  The tuning hyperparameters include:
+
+* `n.trees` (Number of Boosting Iterations)
+
+* `interaction.depth` (Max Tree Depth)
+
+* `shrinkage` (Shrinkage)
+
+* `n.minobsinnode` (Minimum Terminal Node Size)
+
+Setting 180 boosting iterations, 14 layers of trees, shrinkage=0.15, and minimum terminal node size to 12 can offer the slightest error.
+
+## KNN for Regression
+
+This method does not require any additional package. The only tuning hyperparameter is the number of neighbors, which is controlled by `k`. The outcome indicates that the number of neighbors should be 129 to be the most appropriate. 
+
+## Bagging
+
+Initially, I used this method in the package `caret`. However, when running the model, there was an error showing missing values in resampled performance measures resulting from the fact that the tree did not find a good split and used the average of the outcome as the predictor. That's fine, but we cannot calculate $R^2$ since the variance of the predictions is zero. Accordingly, I use the model in the package `ipred` and `plyr` instead. Though this method has no tuning hyperparameters, a model-specific variable importance metric is available. The result suggests that the most critical factor determining the number of orders is the page on which the item is located. Other vital attributes include whether information about the product is provided and whether it is trousers or on sale, which seems reasonable as consumers might be too lazy to browse items in the later pages.
+
+## Boosted Linear Model
+
+This method is in the package `bst`. The tuning hyperparameters include the number of boosting iterations and the level of shrinkage, which is controlled by `mstop` and `nu`, respectively. To achieve the smallest RMSE, we need 233 boosting iterations and the level of shrinkage set to 0.95.
+
+## Neural Network
+
+This method is in the package `nnet`. The number of hidden units and the weighted decay is the tuning hyperparameters controlled by `size` and `decay`, respectively. The final values used for the model were size equal to 0.00001 and decay equal to 0.004.
+
+## ElasticNet
+
+This method is in the package `elasticnet`.The tuning hyperparameters include the fraction of the full solution and the weight decay, which is controlled by `fraction` and `lambda`, respectively. Our analysis shows that picking $\lambda$=0.00007 and fraction=0.98 give the smallest prediction error RMSE. 
+
+## Ensembles
+
+`CaretEnsemble` uses a `glm` to create a simple linear blend of models, and `caretStack` uses a caret model to combine the outputs from several component caret models. Here, I'm utilizing the 11 above-mentioned nonparametric methods to create the Ensemble.
+
+## Comparison
+
+From the following density plots (figure16 ~ figure18), we can see that most models perform evenly concerning the prediction performance. Yet, if we compare the best model in each method, figure19 shows that XGBoost is the best and partial least squares regression has the worst result.
+
+## Measure Model Performance on Testing Data
+
+From table2, I found that XGBoost is the best choice. The potential reason for this might be that outliers have minimal impact on it, and it handles large-sized data sets well. This is true since most of the number of orders is small. I also found that people on Kaggle win most of the competitions with XGBoost. On the other hand, stochastic gradient boosting is also a competitive candidate. These are the two methods that surpass other candidates. Table3 presents the result of rounding the prediction to integers. We can see that there is no evident difference in the two tables regarding the prediction performance.
+
+## Conclusion
+
+From the time cost standpoint, running the Generalized Additive Model is most time-consuming as it took over 6 hours to tune only 12 combinations of hyperparameters. While XGBoost defeated other methods, Ensemble might be a good alternative considering the time taken since it only needs less than half the time XGBoost used to run. If producing a slight error is allowed, with only taking one minute, Elasticnet undoubtedly conquered other defendants. The same conclusion can also be drawn if the prediction is rounded to an integer. Generally, most of the models perform well. Still, depending on how many hyperparameters we plan to tune, the time to produce results may vary. While it took about 40 seconds to run the linear mixed model, it still could not compete with other contenders. Once having a more in-depth understanding of the data, the more appropriate cluster structure can derive a better result.
+
+On the other hand, even with the support of parallel computing, I gave up fitting the random forest model since it took forever to generate result, not to mention to tune hyperparameters. The reason may be that there are more than 13 thousands observations in the data set. Additionally, I quit fitting the support vector machine eventually, as the space complexity for kernel matrix is $O(n^2)$. When $n$ is in order of $10^5$, getting SVM to work is almost impossible since it would require much memory that my laptop can not tackle.   
+
+Given that the outcome variable is an integer, I have read some forums in which people treat it as a categorical variable instead. This might provide us with more powerful insight into selecting the optimal model. To sum up, through taking this course, I feel that people always strive to reduce all sorts of losses by dividing data with different thresholds or using gradient descent in the nonparametric world. By combining various techniques, a new and powerful method might be born.
+
+## Tables and Figures
+
+```{r echo=FALSE, message=FALSE, fig.width = 4.2, fig.height = 3, fig.cap='Ridge'}
+#ridge regression
+grid <-  expand.grid(lambda = seq(0.001, 0.01, by = 0.001))
+start.time <- Sys.time()
+ridge <- train(order ~ ., data = filtered, method = "ridge", 
+                 trControl = fitControl, verbose = FALSE,tuneGrid = grid)
+end.time <- Sys.time()
+t2 <- as.numeric(difftime(end.time, start.time), units="mins")
+trellis.par.set(caretTheme())
+plot(ridge)  
+```
+
+```{r echo=FALSE, fig.cap='Lasso', fig.width = 4.2, fig.height = 3, message=FALSE}
+#lasso regression
+grid <-  expand.grid(fraction = seq(0.980, 0.999, by = 0.001))
+start.time <- Sys.time()
+lasso <- train(order ~ ., data = filtered, method = "lasso", 
+                 trControl = fitControl, tuneGrid= grid)
+end.time <- Sys.time()
+t3 <- as.numeric(difftime(end.time, start.time), units="mins")
+trellis.par.set(caretTheme())
+plot(lasso)  
+```
+
+```{r echo=FALSE, fig.cap='General Additive Model', fig.width = 4.9, fig.height = 3.5, message=FALSE}
+#general additive model
+grid <-  expand.grid(select = c(TRUE, FALSE), 
+                   method = c("GCV.Cp", "GACV.Cp", "REML", "P-REML", "ML", "P-ML"))
+start.time <- Sys.time()
+gam <- train(order ~ ., data = filtered, method = "gam", 
+                 trControl = fitControl,tuneGrid= grid)
+end.time <- Sys.time()
+t4 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(gam)  
+```
+
+```{r echo=FALSE, fig.cap='Extreme Gradient Boosting', message=FALSE}
+#eXtreme Gradient Boosting
+grid <-  expand.grid(nrounds = seq(151, 154), max_depth =seq(7, 9), eta = seq(0.072,0.096,0.008), gamma = 0, colsample_bytree = seq(0.99, 0.999, 0.003),
+                     min_child_weight = 1, subsample =1)
+start.time <- Sys.time()
+xgb <- train(order ~ ., data = filtered, method = "xgbTree", trControl = fitControl, tuneGrid= grid)
+end.time <- Sys.time()
+t5 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(xgb) 
+```
+
+```{r echo=FALSE, fig.cap='Partial Least Square Regression', fig.width = 4.2, fig.height = 3}
+#partial least square regression
+grid <-  expand.grid(ncomp = seq(4, 20))
+start.time <- Sys.time()
+pls <- train(order ~ ., data = filtered, method = "pls", trControl = fitControl, tuneGrid= grid)
+end.time <- Sys.time()
+t6 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(pls) 
+```
+
+```{r echo=FALSE, fig.cap='Stochastic Gradient Boosting', results='hide',fig.width = 6, fig.height = 4}
+#Stochastic Gradient Boosting
+grid <-  expand.grid(n.trees = seq(179, 181), interaction.depth =seq(12, 14),
+shrinkage= seq(0.15,0.17,0.01), n.minobsinnode =c(12,13))
+start.time <- Sys.time()
+sgb <- train(order ~ ., data = filtered, method = "gbm", trControl =fitControl,tuneGrid= grid)
+end.time <- Sys.time()
+t7 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(sgb) 
+``` 
+
+```{r echo=FALSE, fig.cap='KNN for Regression', fig.width = 4.2, fig.height = 3}
+#KNN for Regression
+grid <-  expand.grid(k= seq(100, 150))
+start.time <- Sys.time()
+knn <- train(order ~ ., data = filtered, method = "knn", trControl = fitControl, tuneGrid= grid)
+end.time <- Sys.time()
+t8 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(knn) 
+```
+
+```{r echo=FALSE, fig.cap='Bagging', fig.width = 6, fig.height = 4}
+#Bagging
+start.time <- Sys.time()
+bag <- train(order ~ ., data = filtered,method="treebag",trControl=fitControl,
+                   importance=TRUE)
+end.time <- Sys.time()
+t9 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(varImp(bag))
+```
+
+```{r echo=FALSE, fig.cap='Boosting', fig.width = 6, fig.height = 4}
+#Boosting
+grid <-  expand.grid(mstop= seq(233, 243), nu = seq(0.9,0.99, 0.01))
+start.time <- Sys.time()
+boost <- train(order ~ ., data = filtered, method = "BstLm", trControl = fitControl,
+               tuneGrid= grid)
+end.time <- Sys.time()
+t10 <-as.numeric(difftime(end.time, start.time), units="mins")
+plot(boost) 
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.cap='Neural Network', fig.width = 6, fig.height = 4, results='hide'}
+#Neural Network
+grid <-  expand.grid(size = seq(0.00001, 0.0001, by = 0.00001), 
+                     decay = seq(0.001, 0.005, by = 0.001))
+start.time <- Sys.time()
+nnet <- train(order ~ ., data = filtered, method = "nnet", 
+              trControl = fitControl, verbose = FALSE,tuneGrid = grid)
+end.time <- Sys.time()
+t11 <-as.numeric(difftime(end.time, start.time), units="mins")
+plot(nnet) 
+```
+
+```{r echo=FALSE, fig.cap='ElasticNet',fig.width = 4.9, fig.height = 3.5}
+#Elastic Net
+grid <-  expand.grid(fraction= seq(0.9, 1 ,0.01), lambda = seq(0.00001,0.0001, 0.00001))
+start.time <- Sys.time()
+net <- train(order ~ ., data = filtered, method = "enet", trControl = fitControl, tuneGrid= grid)
+end.time <- Sys.time()
+t12 <- as.numeric(difftime(end.time, start.time), units="mins")
+plot(net) 
+```
+
+```{r echo=FALSE, warning=FALSE,results='hide', fig.cap='Ensembles', fig.width = 6, fig.height = 4}
+trainControl <- trainControl(method = "cv",number = 10, allowParallel = TRUE,
+                             savePredictions=TRUE)
+algorithmList <- c("ridge", "lasso", "gam", "xgbTree", "pls", "gbm", "knn",
+                   "treebag", "BstLm", "nnet", "enet")
+start.time <- Sys.time() 
+models <- caretList(order~., data=filtered,trControl=trainControl,
+                    methodList=algorithmList) 
+end.time <- Sys.time()
+t13 <- as.numeric(difftime(end.time, start.time), units="mins")
+results <- resamples(models)
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+stack.glm <- caretStack(models, method="glm", trControl=trainControl)
+bwplot(results, scales=scales)
+```
+
+```{r echo=FALSE, fig.cap='Density Plot for each model',fig.width = 4.9, fig.height = 3.5}
+a = densityplot(ridge, pch = "|", main = "Ridge")
+b = densityplot(lasso, pch = "|", main = "Lasso")
+c = densityplot(gam, pch = "|", main = "Generalized Additive")
+d = densityplot(xgb, pch = "|", main = "XGBoost")
+e = densityplot(pls, pch = "|", main = "Partial Least Square")
+f = densityplot(sgb, pch = "|", main = "Stochastic Gradient Boosting")
+g = densityplot(knn, pch = "|", main = "KNN for Regression")
+h = densityplot(bag, pch = "|", main = "Bagging")
+i = densityplot(boost, pch = "|", main = "Boosting")
+j = densityplot(nnet, pch = "|", main = "Neural Network")
+k = densityplot(net, pch = "|", main = "Elasticnet")
+print(c, position = c(0, 0, 0.5, 0.5), more = TRUE)
+print(a, position = c(0, 0.5, 0.5, 1), more = TRUE)
+print(d, position = c(0.5, 0, 1, 0.5), more = TRUE)
+print(b, position = c(0.5, 0.5, 1, 1))
+```
+
+```{r echo=FALSE, fig.cap='Density Plot for each model',,fig.width = 4.9, fig.height = 3.5}
+print(g, position = c(0, 0, 0.5, 0.5), more = TRUE)
+print(e, position = c(0, 0.5, 0.5, 1), more = TRUE)
+print(h, position = c(0.5, 0, 1, 0.5), more = TRUE)
+print(f, position = c(0.5, 0.5, 1, 1))
+```
+
+```{r echo=FALSE, fig.cap='Density Plot for each model',,fig.width = 4.9, fig.height = 3.5}
+print(i, position = c(0, 0.5, 0.5, 1), more = TRUE)
+print(j, position = c(0.5, 0.5, 1, 1), more = TRUE)
+print(k, position = c(0, 0, 0.5, 0.5))
+```
+
+```{r echo=FALSE, fig.cap='Comparison between Different Models', fig.width = 6, fig.height = 4}
+models_compare <- resamples(list(
+  Ridge=ridge,
+  Lasso=lasso,
+  GAM=gam,
+  XGB=xgb,
+  PLS=pls,
+  SGB=sgb,
+  KNN=knn,
+  Bagging=bag,
+  Boosting = boost,
+  `Neural Network` = nnet,
+  Elasticnet = net))
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(models_compare, scales=scales)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+test = testing[,colnames(testing) %in% colnames(filtered)]
+rss <- sum((predict(model1, test_glm)-test_glm$order)^2) 
+tss <- sum((predict(model1, test_glm)-mean(test_glm$order))^2) 
+GLM = c(sqrt(mean((test_glm$order - predict(model1, test_glm))^2)),  1-rss/tss,
+       mae(test_glm$order, predict(model1, test_glm)))
+Ridge = postResample(pred = predict(ridge, test), obs = test$order)
+Lasso = postResample(pred = predict(lasso, test), obs = test$order)
+GAM = postResample(pred = predict(gam, test), obs = test$order)
+XGB = postResample(pred = predict(xgb, test), obs = test$order)
+PLS = postResample(pred = predict(pls, test), obs = test$order)
+SGB = postResample(pred = predict(sgb, test), obs = test$order)
+KNN = postResample(pred = predict(knn, test), obs = test$order)
+Bagging = postResample(pred = predict(bag, test), obs = test$order)
+Boosting = postResample(pred = predict(boost, test), obs = test$order)
+`Neural Network` = postResample(pred = predict(nnet, test), obs = test$order)
+Elasticnet = postResample(pred = predict(net, test), obs = test$order)
+Ensemble = postResample(pred = predict(stack.glm, test), obs = test$order)
+comparision = cbind(rbind(GLM, Ridge, Lasso, GAM, XGB, PLS, SGB, KNN, Bagging, Boosting,
+                    `Neural Network`, Elasticnet, Ensemble), `Minutes Taken` = c(t1,t2,t3,                                                              t4,t5,t6,t7,t8,t9,t10,t11,t12,t13))
+kable(comparision, digits = 5, caption = 'Comparision between Different Models')
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+test = testing[,colnames(testing) %in% colnames(filtered)]
+rss <- sum(round((predict(model1, test_glm))-test_glm$order)^2) 
+tss <- sum(round((predict(model1, test_glm))-mean(test_glm$order))^2) 
+GLM = c(sqrt(mean((test_glm$order - round(predict(model1, test_glm)))^2)), 1-rss/tss,
+       mae(test_glm$order, round(predict(model1, test_glm))))
+Ridge = postResample(pred = round(predict(ridge, test)), obs = test$order)
+Lasso = postResample(pred = round(predict(lasso, test)), obs = test$order)
+GAM = postResample(pred = round(predict(gam, test)), obs = test$order)
+XGB = postResample(pred = round(predict(xgb, test)), obs = test$order)
+PLS = postResample(pred = round(predict(pls, test)), obs = test$order)
+SGB = postResample(pred = round(predict(sgb, test)), obs = test$order)
+KNN = postResample(pred = round(predict(knn, test)), obs = test$order)
+Bagging = postResample(pred = round(predict(bag, test)), obs = test$order)
+Boosting = postResample(pred = round(predict(boost, test)), obs = test$order)
+`Neural Network` = postResample(pred = round(predict(nnet, test)), obs = test$order)
+Elasticnet = postResample(pred = round(predict(net, test)), obs = test$order)
+Ensemble = postResample(pred = round(predict(stack.glm, test)), obs = test$order)
+comparision2 = rbind(GLM, Ridge, Lasso, GAM, XGB, PLS, SGB, KNN, Bagging, Boosting,
+                     `Neural Network`, Elasticnet, Ensemble)
+kable(comparision2, digits = 5, caption = 'Comparison between Different Models')
+```
+
+## References
+
+1. [The Caret Package](https://topepo.github.io/caret/index.html)
+2. [A Brief Introduction to caretEnsemble](https://cran.r-project.org/web/packages/caretEnsemble/vignettes/caretEnsemble-intro.html)
+
+## Data Source
+
+This data set comes from [UC Irvine Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/clickstream+data+for+online+shopping).
+
+£apczyñski M., Bia³ow¹s S. (2013) Discovering Patterns of Users' Behaviour in an E-shop - Comparison of Consumer Buying Behaviours in Poland and Other European Countries, “Studia Ekonomiczne”, nr 151, “La société de l'information : perspective européenne et globale : les usages et les risques d'Internet pour les citoyens et les consommateurs”, p. 144-153. 
