@@ -2,8 +2,8 @@
 
 Introduction
 
-This was the final project during the Nonparametric Regression And Classification class at UW. My goal is to compare the prediction performances between the Negative Binomial GLM model and common machine learning techniques, including lasso regression, ridge regression, general additive model, partial least square regression, XGBoost, KNN for Regression, stochastic gradient boosting, bagging, elasticnet, ensemble, boosting, and neural network. All codes are written in R using the packages lme4 and Caret. The evaluation criterion for choosing the best machine learning model is RMSE (root-mean-square error).
-The data set contains information on clickstream from an online store offering clothing for pregnant women. Data are from five months of 2008 and include, among others, product category, location of the photo on the page, country of origin of the IP address, and product price in US dollars. There are 132380 observations and 14 variables with no missing values in the original data set.
+This was the final project in UW's Nonparametric Regression And Classification class. My goal is to compare the prediction performances between the Negative Binomial GLM model and common machine learning techniques, including lasso regression, ridge regression, general additive model, partial least square regression, XGBoost, KNN for Regression, stochastic gradient boosting, bagging, elasticnet, ensemble, boosting, and neural network. All codes are written in R using the packages lme4 and Caret. The evaluation criterion for choosing the best machine learning model is RMSE (root-mean-square error).
+The data set contains information on clickstream from an online store offering clothing for pregnant women. Therefore, the objective is to forecast the number of orders by utilizing other available information. Data are from five months of 2008 and include, among others, product category, location of the photo on the page, country of origin of the IP address, and product price in US dollars. There are 132380 observations and 14 variables with no missing values in the original data set.
 
 Conclusion
 
